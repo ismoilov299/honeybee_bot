@@ -232,11 +232,11 @@ async def check_membership_handler(message: Message):
 
     Bu yerda 5 nafar mutaxassis o'z tajribasi va bilimlarini jamlab, siz uchun bepul darslik tayyorlashdi. Har bir mavzu — rivojingiz uchun muhim:
 
-    📌 <b>Gulruh</b> – Hammasi blogdan boshlanadi  
-    📌 <b>Ayilen</b> – Oila qurishga tayyorgarlik va qo'rquvlarni yengish  
-    📌 <b>Mohinur Barista</b> – Koreyada yashash va o'qish imkoniyatlari  
-    📌 <b>Xilola Qayumova</b> – Homiladorlar bilishi shart  
-    📌 <b>Sojida Karimova</b> – Sog'lom munosabatlar siri  
+    📌<b>Gulruh</b> – Hammasi blogdan boshlanadi  
+    📌<b>Ayilen</b> – Oila qurishga tayyorgarlik va qo'rquvlarni yengish  
+    📌<b>Mohinur Barista</b> – Koreyada yashash va o'qish imkoniyatlari  
+    📌<b>Xilola Qayumova</b> – Homiladorlar bilishi shart  
+    📌<b>Sojida Karimova</b> – Sog'lom munosabatlar siri  
 
     📖 Bu loyiha sizga maksimal foyda berish va yangi imkoniyatlarga yo'l ochish uchun takrorlanmas imkon.
 
