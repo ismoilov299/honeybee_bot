@@ -232,7 +232,7 @@ async def check_membership_handler(message: Message):
 
     Bu yerda 5 nafar mutaxassis o'z tajribasi va bilimlarini jamlab, siz uchun bepul darslik tayyorlashdi. Har bir mavzu — rivojingiz uchun muhim:
 
-    📌 Gulruh – Hammasi blogdan boshlanadi*  
+    📌 Gulruh – Hammasi blogdan boshlanadi  
     📌 Ayilen – Oila qurishga tayyorgarlik va qo'rquvlarni yengish  
     📌 Mohinur Barista – Koreyada yashash va o'qish imkoniyatlari  
     📌 Xilola Qayumova – Homiladorlar bilishi shart  
