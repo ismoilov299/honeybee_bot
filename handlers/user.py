@@ -325,7 +325,7 @@ async def send_offer_post(message: Message):
 
 @router.callback_query(F.data == "request_sent")
 async def request_sent_handler(callback: CallbackQuery):
-    """Request yuborgan callback handleri"""
+    """Request yuborgan callback handleri - admin bot bilan haqiqiy tekshirish"""
     user_id = callback.from_user.id
     user = await db.get_user(user_id)
 
@@ -333,12 +333,157 @@ async def request_sent_handler(callback: CallbackQuery):
         await callback.answer("❌ Xato yuz berdi. /start ni bosing.")
         return
 
-    # Barcha kanallarga request yuborgan deb belgilash
+    # Kanallarni olish
     channels = await db.get_active_channels()
+
+    if not channels:
+        await callback.answer("❌ Aktiv kanallar yo'q.")
+        return
+
+    # Har bir kanalga a'zolikni haqiqiy tekshirish
+    joined_channels = []
+    pending_requests = []
+    not_joined_channels = []
+
+    checking_message = await callback.message.edit_text("⏳ Kanallar tekshirilmoqda...")
+
     for channel in channels:
+        try:
+            channel_identifier = channel['channel_id']
+
+            try:
+                # Kanal ma'lumotlarini olish
+                try:
+                    if channel_identifier.startswith('https://t.me/+'):
+                        # Invite link uchun chat_id olish
+                        chat_info = await callback.bot.get_chat(channel_identifier)
+                        chat_id = chat_info.id
+                    else:
+                        chat_id = channel_identifier
+
+                    # Botning kanalda admin ekanligini tekshirish
+                    bot_member = await callback.bot.get_chat_member(chat_id, callback.bot.id)
+
+                    if bot_member.status not in ['administrator', 'creator']:
+                        logger.warning(f"Bot kanal {channel['channel_name']} da admin emas!")
+                        # Agar bot admin bo'lmasa, foydalanuvchini "request yuborgan" deb belgilash
+                        pending_requests.append(channel)
+                        await db.set_request_sent(user_id, channel['id'])
+                        continue
+
+                except Exception as e:
+                    logger.error(f"Bot admin holatini tekshirishda xato: {e}")
+                    pending_requests.append(channel)
+                    await db.set_request_sent(user_id, channel['id'])
+                    continue
+
+                # Foydalanuvchi holatini tekshirish
+                member = await callback.bot.get_chat_member(chat_id, user_id)
+
+                if member.status in ['member', 'administrator', 'creator']:
+                    # To'liq a'zo
+                    joined_channels.append(channel)
+                    await db.join_channel(user_id, channel['id'])
+
+                elif member.status == 'restricted':
+                    # Restricted - bu join request yuborgan bo'lishi mumkin
+                    if hasattr(member, 'is_member') and member.is_member:
+                        # Cheklangan lekin a'zo
+                        joined_channels.append(channel)
+                        await db.join_channel(user_id, channel['id'])
+                    else:
+                        # Request yuborgan, lekin hali tasdiqlanmagan
+                        pending_requests.append(channel)
+                        await db.set_request_sent(user_id, channel['id'])
+
+                elif member.status == 'left':
+                    # Kanalga qo'shilmagan - hech qanday action qilmagan
+                    not_joined_channels.append(channel)
+
+                elif member.status == 'pending':
+                    # Join request yuborgan, admin tasdiqini kutmoqda
+                    pending_requests.append(channel)
+                    await db.set_request_sent(user_id, channel['id'])
+
+                elif member.status == 'kicked':
+                    # Kanaldan chiqarilgan
+                    not_joined_channels.append(channel)
+
+                else:
+                    # Boshqa holatlar
+                    not_joined_channels.append(channel)
+
+            except Exception as e:
+                if "Bad Request: user not found" in str(e):
+                    # Foydalanuvchi kanalga hech qo'shilmagan
+                    not_joined_channels.append(channel)
+                elif "Bad Request: chat not found" in str(e):
+                    # Kanal topilmagan yoki bot admin emas
+                    logger.error(f"Kanal {channel_identifier} topilmagan yoki bot admin emas")
+                    pending_requests.append(channel)
+                    await db.set_request_sent(user_id, channel['id'])
+                else:
+                    logger.error(f"Kanal {channel_identifier} tekshirishda xato: {e}")
+                    pending_requests.append(channel)
+                    await db.set_request_sent(user_id, channel['id'])
+
+        except Exception as e:
+            logger.error(f"Kanal ma'lumotlari olishda xato: {e}")
+            pending_requests.append(channel)
+            await db.set_request_sent(user_id, channel['id'])
+
+    # Barcha kanallarga request yuborgan deb belgilash (faqat pending va not_joined uchun)
+    for channel in pending_requests + not_joined_channels:
         await db.set_request_sent(user_id, channel['id'])
 
-    await callback.message.edit_text("🎉 <b>Ajoyib! Barcha kanallarga request yubordingiz!</b>")
+    # Natijani ko'rsatish
+    total_channels = len(channels)
+    joined_count = len(joined_channels)
+    pending_count = len(pending_requests)
+    not_joined_count = len(not_joined_channels)
+
+    if not_joined_channels or pending_requests:
+        # Hali ham ba'zi kanallarga qo'shilmagan yoki pending
+        status_text = f"📊 <b>Kanallar holati:</b>\n\n"
+        status_text += f"✅ Qo'shilgan: {joined_count}\n"
+
+        if pending_count > 0:
+            status_text += f"⏳ Request yuborilgan: {pending_count}\n"
+
+        if not_joined_count > 0:
+            status_text += f"❌ Qo'shilmagan: {not_joined_count}\n"
+
+        status_text += f"\n📈 Jami: {total_channels}\n\n"
+
+        if not_joined_channels:
+            status_text += "<b>Qo'shilmagan kanallar:</b>\n"
+            for channel in not_joined_channels:
+                status_text += f"• {channel['channel_name']}\n"
+
+        if pending_requests:
+            status_text += "\n<b>Request yuborilgan kanallar:</b>\n"
+            for channel in pending_requests:
+                status_text += f"• {channel['channel_name']}\n"
+
+        status_text += "\n⚠️ Barcha kanallarga qo'shiling va admin sizni tasdiqlashini kuting!"
+
+        await checking_message.edit_text(status_text)
+
+        # Qayta tekshirish tugmasi
+        retry_builder = InlineKeyboardBuilder()
+        retry_builder.button(
+            text="🔄 Qayta tekshirish",
+            callback_data="retry_check"
+        )
+
+        await callback.message.answer(
+            "👆 Barcha kanallarga qo'shilgandan va adminlar tasdiqlagandan so'ng 'Qayta tekshirish' tugmasini bosing!",
+            reply_markup=retry_builder.as_markup()
+        )
+        return
+
+    # Barcha kanallarga qo'shilgan bo'lsa
+    await checking_message.edit_text("🎉 <b>Ajoyib! Barcha kanallarga muvaffaqiyatli qo'shildingiz!</b>")
 
     # Referral linkni yaratish
     bot_info = await callback.bot.get_me()
