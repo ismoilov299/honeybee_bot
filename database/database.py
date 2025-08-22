@@ -302,6 +302,33 @@ class Database:
 
             return stats
 
+    async def get_completed_users(self) -> List[Dict]:
+        """Vazifani bajargan barcha foydalanuvchilarni olish"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("""
+                    SELECT telegram_id, username, first_name, last_name, 
+                           referral_count, completed_task, created_at
+                    FROM users 
+                    WHERE completed_task = 1
+                    ORDER BY created_at DESC
+                """) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def get_all_users(self) -> List[Dict]:
+        """Barcha foydalanuvchilarni olish"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("""
+                SELECT telegram_id, username, first_name, last_name, 
+                       referral_count, completed_task, created_at
+                FROM users 
+                ORDER BY created_at DESC
+            """) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
 
 # Singleton pattern uchun
 db = Database()

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardRemove
@@ -442,7 +443,8 @@ async def broadcast_start(message: Message, state: FSMContext):
 
     await message.answer(
         "📢 Barcha foydalanuvchilarga yuborilecek xabarni kiriting:\n\n"
-        "💡 HTML formatidan foydalanishingiz mumkin.",
+        "💡 HTML formatidan foydalanishingiz mumkin.\n"
+        "📷 Rasm ham yuborishingiz mumkin.",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(AdminStates.waiting_for_broadcast)
@@ -456,14 +458,77 @@ async def broadcast_process(message: Message, state: FSMContext):
         await message.answer("❌ Bekor qilindi.", reply_markup=get_admin_keyboard())
         return
 
-    # Bu yerda broadcast logikasini qo'shish kerak
-    # Hozircha shunchaki tasdiqlash xabari yuboramiz
-    await message.answer(
-        "📢 Xabar yuborilmoqda...\n\n"
-        "⚠️ Bu funksiya hali ishlab chiqilmoqda.",
+    # Barcha foydalanuvchilarni olish
+    all_users = await db.get_all_users()
+
+    if not all_users:
+        await message.answer("❌ Hozircha foydalanuvchilar yo'q.", reply_markup=get_admin_keyboard())
+        await state.clear()
+        return
+
+    # Xabar mazmuni
+    broadcast_text = message.text if message.text else message.caption
+    broadcast_photo = None
+
+    # Agar rasm yuborilgan bo'lsa
+    if message.photo:
+        broadcast_photo = message.photo[-1].file_id
+
+    # Xabar yuborish jarayoni
+    sent_count = 0
+    failed_count = 0
+
+    # Progress xabari
+    progress_message = await message.answer(
+        f"📤 Xabar yuborish boshlandi...\n👥 Jami: {len(all_users)} foydalanuvchi",
         reply_markup=get_admin_keyboard()
     )
 
+    for user in all_users:
+        try:
+            if broadcast_photo:
+                # Rasm bilan xabar yuborish
+                await message.bot.send_photo(
+                    chat_id=user['telegram_id'],
+                    photo=broadcast_photo,
+                    caption=broadcast_text,
+                    parse_mode="HTML"
+                )
+            else:
+                # Faqat matn yuborish
+                await message.bot.send_message(
+                    chat_id=user['telegram_id'],
+                    text=broadcast_text,
+                    parse_mode="HTML"
+                )
+            sent_count += 1
+
+            # Har 10 ta xabardan keyin progress yangilash
+            if sent_count % 10 == 0:
+                await progress_message.edit_text(
+                    f"📤 Xabar yuborish davom etmoqda...\n"
+                    f"✅ Yuborildi: {sent_count}\n"
+                    f"❌ Xato: {failed_count}\n"
+                    f"📊 Progress: {sent_count + failed_count}/{len(all_users)}"
+                )
+
+            # Telegram limitlariga mos ravishda kechikish
+            await asyncio.sleep(0.05)  # 50ms kechikish
+
+        except Exception as e:
+            failed_count += 1
+            logger.error(f"Foydalanuvchi {user['telegram_id']} ga xabar yuborishda xato: {e}")
+
+    # Yakuniy natija
+    final_message = f"""📊 <b>Xabar yuborish yakunlandi!</b>
+
+✅ Muvaffaqiyatli yuborildi: {sent_count}
+❌ Xato: {failed_count}
+👥 Jami: {len(all_users)}
+
+{"🎉 Barcha foydalanuvchilarga muvaffaqiyatli yuborildi!" if failed_count == 0 else f"⚠️ {failed_count} ta foydalanuvchiga yuborib bo'lmadi"}"""
+
+    await progress_message.edit_text(final_message)
     await state.clear()
 
 
@@ -478,3 +543,67 @@ async def back_to_user_mode(message: Message, state: FSMContext):
         "👤 Foydalanuvchi rejimiga qaytdingiz.",
         reply_markup=get_start_keyboard()
     )
+
+
+@router.message(Command("msg"))
+async def broadcast_message_handler(message: Message):
+    """Barcha vazifani bajargan foydalanuvchilarga xabar yuborish"""
+
+    # Faqat admin foydalana olishi uchun tekshirish (ixtiyoriy)
+    # admin_ids = [123456789, 987654321]  # Admin ID larini kiriting
+    # if message.from_user.id not in admin_ids:
+    #     await message.answer("❌ Bu komandani faqat adminlar ishlatishi mumkin!")
+    #     return
+
+    # Vazifani bajargan barcha foydalanuvchilarni olish
+    completed_users = await db.get_completed_users()
+
+    if not completed_users:
+        await message.answer("❌ Hozircha vazifani bajargan foydalanuvchilar yo'q.")
+        return
+
+    success_message = """Tabriklayman, siz muvaffaqiyatli ro'yxatdan o'tdingiz 🥳
+
+https://t.me/+mnyDxW0Zsug3MmRi
+
+Darsliklar shu kanalga yuboriladi. Qo'shilib oling!"""
+
+    # Xabar yuborish jarayoni
+    sent_count = 0
+    failed_count = 0
+
+    # Progress xabari
+    progress_message = await message.answer(
+        f"📤 Xabar yuborish boshlandi...\n👥 Jami: {len(completed_users)} foydalanuvchi")
+
+    for user in completed_users:
+        try:
+            await message.bot.send_message(
+                chat_id=user['telegram_id'],
+                text=success_message
+            )
+            sent_count += 1
+
+            # Har 10 ta xabardan keyin progress yangilash
+            if sent_count % 10 == 0:
+                await progress_message.edit_text(
+                    f"📤 Xabar yuborish davom etmoqda...\n"
+                    f"✅ Yuborildi: {sent_count}\n"
+                    f"❌ Xato: {failed_count}\n"
+                    f"📊 Progress: {sent_count + failed_count}/{len(completed_users)}"
+                )
+
+        except Exception as e:
+            failed_count += 1
+            logger.error(f"Foydalanuvchi {user['telegram_id']} ga xabar yuborishda xato: {e}")
+
+    # Yakuniy natija
+    final_message = f"""📊 <b>Xabar yuborish yakunlandi!</b>
+
+✅ Muvaffaqiyatli yuborildi: {sent_count}
+❌ Xato: {failed_count}
+👥 Jami: {len(completed_users)}
+
+{"🎉 Barcha foydalanuvchilarga muvaffaqiyatli yuborildi!" if failed_count == 0 else f"⚠️ {failed_count} ta foydalanuvchiga yuborib bo'lmadi"}"""
+
+    await progress_message.edit_text(final_message)
