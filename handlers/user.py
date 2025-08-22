@@ -895,3 +895,142 @@ Admin bilan bog'laning
     """
 
     await message.answer(help_text)
+
+
+@router.message(Command("debug_me"))
+async def debug_user_status(message: Message):
+    """Foydalanuvchi holatini debug qilish"""
+    user_id = message.from_user.id
+
+    # Database'dan ma'lumotlarni olish
+    user = await db.get_user(user_id)
+    channels = await db.get_active_channels()
+
+    debug_text = f"🔍 <b>Debug ma'lumotlari:</b>\n\n"
+    debug_text += f"👤 User ID: {user_id}\n"
+    debug_text += f"📝 Username: {user.get('username', 'N/A')}\n\n"
+
+    debug_text += f"📺 <b>Kanallar ({len(channels)}):</b>\n\n"
+
+    for i, channel in enumerate(channels, 1):
+        debug_text += f"<b>{i}. {channel['channel_name']}</b>\n"
+        debug_text += f"🆔 Channel ID: <code>{channel['channel_id']}</code>\n"
+
+        # Database'dan user-channel holatini olish
+        user_channel_status = await db.get_user_channel_status(user_id, channel['id'])
+
+        if user_channel_status:
+            debug_text += f"📊 DB Status:\n"
+            debug_text += f"   • Joined: {user_channel_status.get('joined', 0)}\n"
+            debug_text += f"   • Request sent: {user_channel_status.get('request_sent', 0)}\n"
+        else:
+            debug_text += f"📊 DB Status: Hech qanday ma'lumot yo'q\n"
+
+        # Telegram'dan haqiqiy holatni tekshirish
+        try:
+            if channel['channel_id'].startswith('https://t.me/+'):
+                try:
+                    chat_info = await message.bot.get_chat(channel['channel_id'])
+                    chat_id = chat_info.id
+                    member = await message.bot.get_chat_member(chat_id, user_id)
+                except:
+                    member = await message.bot.get_chat_member(channel['channel_id'], user_id)
+            else:
+                member = await message.bot.get_chat_member(channel['channel_id'], user_id)
+
+            debug_text += f"🔗 Telegram Status: <code>{member.status}</code>\n"
+
+            if hasattr(member, 'is_member'):
+                debug_text += f"   • is_member: {member.is_member}\n"
+
+        except Exception as e:
+            debug_text += f"❌ Telegram Error: {str(e)[:50]}...\n"
+
+        debug_text += "\n"
+
+    # Uzun xabarni bo'lish
+    if len(debug_text) > 4000:
+        parts = [debug_text[i:i + 4000] for i in range(0, len(debug_text), 4000)]
+        for part in parts:
+            await message.answer(part)
+    else:
+        await message.answer(debug_text)
+
+
+@router.message(Command("debug_channels"))
+async def debug_channels_status(message: Message):
+    """Kanallar holatini debug qilish"""
+    user_id = message.from_user.id
+
+    # Haqiqiy holatni olish
+    channel_status = await db.check_all_channels_joined_real(user_id)
+
+    debug_text = f"🔍 <b>Kanallar debug:</b>\n\n"
+    debug_text += f"📈 Jami kanallar: {channel_status['total']}\n"
+    debug_text += f"✅ Qo'shilgan: {channel_status['joined']}\n"
+    debug_text += f"⏳ Pending: {channel_status['pending']}\n"
+    debug_text += f"❌ Qo'shilmagan: {channel_status['not_joined']}\n"
+    debug_text += f"🎯 Barchasi qo'shilganmi: {channel_status['all_joined']}\n\n"
+
+    # Har bir kanal uchun batafsil
+    channels = await db.get_active_channels()
+    for channel in channels:
+        user_channel_status = await db.get_user_channel_status(user_id, channel['id'])
+
+        debug_text += f"📌 <b>{channel['channel_name']}</b>\n"
+
+        if user_channel_status:
+            debug_text += f"   • Joined: {user_channel_status.get('joined', 0)}\n"
+            debug_text += f"   • Request sent: {user_channel_status.get('request_sent', 0)}\n"
+        else:
+            debug_text += f"   • Ma'lumot yo'q\n"
+        debug_text += "\n"
+
+    await message.answer(debug_text)
+
+
+@router.message(Command("force_check"))
+async def force_check_channels(message: Message):
+    """Majburiy tekshirish va yangilash"""
+    user_id = message.from_user.id
+
+    progress_msg = await message.answer("🔄 Majburiy tekshirish boshlandi...")
+
+    channels = await db.get_active_channels()
+    updated_count = 0
+
+    for channel in channels:
+        try:
+            if channel['channel_id'].startswith('https://t.me/+'):
+                try:
+                    chat_info = await message.bot.get_chat(channel['channel_id'])
+                    chat_id = chat_info.id
+                    member = await message.bot.get_chat_member(chat_id, user_id)
+                except:
+                    member = await message.bot.get_chat_member(channel['channel_id'], user_id)
+            else:
+                member = await message.bot.get_chat_member(channel['channel_id'], user_id)
+
+            # Holatga qarab database'ni yangilash
+            if member.status in ['member', 'administrator', 'creator']:
+                await db.join_channel(user_id, channel['id'])
+                updated_count += 1
+            elif member.status == 'restricted' and hasattr(member, 'is_member') and member.is_member:
+                await db.join_channel(user_id, channel['id'])
+                updated_count += 1
+            elif member.status in ['pending', 'left']:
+                # Pending yoki left - request yuborgan deb belgilash
+                await db.set_request_sent(user_id, channel['id'])
+            elif member.status == 'kicked':
+                # Kicked - database'dan o'chirish yoki 0 qilish
+                # Hozircha hech narsa qilmaymiz
+                pass
+
+        except Exception as e:
+            logger.error(f"Force check error for {channel['channel_name']}: {e}")
+
+    await progress_msg.edit_text(
+        f"✅ Majburiy tekshirish tugadi!\n\n"
+        f"📊 {updated_count} ta kanal holati yangilandi.\n\n"
+        f"Endi /debug_me bilan holatni tekshiring."
+    )
