@@ -365,6 +365,14 @@ class Database:
                 'all_joined': total_channels > 0 and joined_channels == total_channels
             }
 
+    async def reset_user_channel_status(self, user_id: int):
+        """Foydalanuvchining barcha kanal holatini tozalash"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                DELETE FROM user_channels WHERE user_id = ?
+            """, (user_id,))
+            await db.commit()
+
 
 # Singleton pattern uchun
 db = Database()

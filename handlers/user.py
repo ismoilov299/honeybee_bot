@@ -1034,3 +1034,19 @@ async def force_check_channels(message: Message):
         f"📊 {updated_count} ta kanal holati yangilandi.\n\n"
         f"Endi /debug_me bilan holatni tekshiring."
     )
+
+
+@router.message(Command("reset_me"))
+async def reset_user_status(message: Message):
+    """Foydalanuvchi holatini reset qilish"""
+    user_id = message.from_user.id
+
+    # Database'dan barcha kanal holatini o'chirish
+    await db.reset_user_channel_status(user_id)
+
+    await message.answer(
+        "🔄 <b>Sizning kanal holatlaringiz tozalandi!</b>\n\n"
+        "Endi qaytadan '✅ Tekshirish' tugmasini bosing va "
+        "faqat haqiqatan request yuborgan kanallar uchun "
+        "'✅ Request yuborgan' tugmasini bosing."
+    )
