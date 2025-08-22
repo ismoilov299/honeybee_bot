@@ -1699,3 +1699,231 @@ async def raw_api_check(message: Message):
             result_text += f"❌ Xato: {requests_result['error']}\n"
 
         await message.answer(result_text)
+
+
+@router.message(Command("raw_check"))
+async def raw_api_check(message: Message):
+    """Raw API bilan join requestlarni tekshirish"""
+    user_id = message.from_user.id
+
+    channels = await db.get_active_channels()
+
+    for channel in channels[:2]:  # Faqat birinchi 2 tasi
+        channel_id = channel['channel_id']
+
+        # Raw API chaqiruvi
+        requests_result = await raw_get_chat_join_requests(message.bot.token, channel_id, 50)
+
+        result_text = f"📺 <b>{channel['channel_name']}</b>\n\n"
+
+        if requests_result["success"]:
+            requests = requests_result["requests"]
+            total_count = requests_result["total_count"]
+
+            result_text += f"📋 Jami pending requests: {total_count}\n"
+
+            # Foydalanuvchini qidirish
+            found_user = False
+            for request in requests:
+                if request.get("from", {}).get("id") == user_id:
+                    found_user = True
+                    result_text += f"✅ <b>Sizning requestingiz topildi!</b>\n"
+                    result_text += f"📅 Sana: {request.get('date', 'N/A')}\n"
+                    if request.get("bio"):
+                        result_text += f"📝 Bio: {request['bio']}\n"
+                    break
+
+            if not found_user:
+                result_text += f"❌ Sizning requestingiz topilmadi\n"
+
+            result_text += f"\n📝 Oxirgi 5 ta request:\n"
+            for request in requests[:5]:
+                user_info = request.get("from", {})
+                result_text += f"• {user_info.get('first_name', 'N/A')} (ID: {user_info.get('id')})\n"
+
+        else:
+            result_text += f"❌ Xato: {requests_result['error']}\n"
+
+        await message.answer(result_text)
+
+
+async def check_user_channel_status_detailed(bot, chat_id, user_id):
+    """Foydalanuvchi holatini batafsil tekshirish"""
+    try:
+        # Bot admin ekanligini tekshirish
+        try:
+            bot_member = await bot.get_chat_member(chat_id, bot.id)
+            bot_is_admin = bot_member.status in ['administrator', 'creator']
+        except:
+            bot_is_admin = False
+
+        # Foydalanuvchi holatini olish
+        member = await bot.get_chat_member(chat_id, user_id)
+
+        result = {
+            "status": member.status,
+            "bot_is_admin": bot_is_admin,
+            "interpretation": "",
+            "likely_pending": False,
+            "can_join": True
+        }
+
+        # Status bo'yicha tahlil
+        if member.status == "left":
+            result["interpretation"] = "Kanalga qo'shilmagan"
+            result["likely_pending"] = False
+            result["can_join"] = True
+
+        elif member.status == "member":
+            result["interpretation"] = "Faol a'zo"
+            result["likely_pending"] = False
+            result["can_join"] = False  # Allaqachon a'zo
+
+        elif member.status == "administrator":
+            result["interpretation"] = "Administrator"
+            result["likely_pending"] = False
+            result["can_join"] = False
+
+        elif member.status == "creator":
+            result["interpretation"] = "Kanal yaratuvchisi"
+            result["likely_pending"] = False
+            result["can_join"] = False
+
+        elif member.status == "restricted":
+            is_member = getattr(member, 'is_member', False)
+            if is_member:
+                result["interpretation"] = "Cheklangan a'zo"
+                result["likely_pending"] = False
+                result["can_join"] = False
+            else:
+                result["interpretation"] = "Request yuborgan yoki cheklangan"
+                result["likely_pending"] = True
+                result["can_join"] = False
+
+        elif member.status == "kicked":
+            result["interpretation"] = "Kanaldan chiqarilgan"
+            result["likely_pending"] = False
+            result["can_join"] = False
+
+        else:
+            result["interpretation"] = f"Noma'lum status: {member.status}"
+            result["likely_pending"] = False
+            result["can_join"] = True
+
+        # Qo'shimcha ma'lumotlar
+        if hasattr(member, 'until_date') and member.until_date:
+            result["until_date"] = member.until_date
+
+        if hasattr(member, 'can_send_messages'):
+            result["can_send_messages"] = member.can_send_messages
+
+        return result
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# Raw API chaqiruvi (agar kerak bo'lsa)
+async def raw_get_chat_join_requests(bot_token, chat_id, limit=20):
+    """Raw API orqali join requestlarni olish"""
+    import aiohttp
+
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/getChatJoinRequests"
+        params = {
+            "chat_id": chat_id,
+            "limit": limit
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=params) as response:
+                result = await response.json()
+
+                if result.get("ok"):
+                    return {
+                        "success": True,
+                        "requests": result.get("result", {}).get("requests", []),
+                        "total_count": result.get("result", {}).get("total_count", 0)
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": result.get("description", "API xatosi")
+                    }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# Sodda va ishonchli tekshirish
+@router.message(Command("simple_check"))
+async def simple_channel_check(message: Message):
+    """Oddiy va ishonchli kanal tekshiruvi"""
+    user_id = message.from_user.id
+
+    await message.answer("🔍 Kanallaringiz tekshirilmoqda...")
+
+    channels = await db.get_active_channels()
+
+    summary = {
+        "joined": [],
+        "likely_pending": [],
+        "not_joined": [],
+        "blocked": [],
+        "errors": []
+    }
+
+    for channel in channels:
+        channel_id = channel['channel_id']
+        channel_name = channel['channel_name']
+
+        status_info = await check_user_channel_status_detailed(message.bot, channel_id, user_id)
+
+        if status_info.get("error"):
+            summary["errors"].append({"name": channel_name, "error": status_info["error"]})
+            continue
+
+        status = status_info["status"]
+
+        if status in ["member", "administrator", "creator"]:
+            summary["joined"].append(channel_name)
+        elif status_info["likely_pending"]:
+            summary["likely_pending"].append(channel_name)
+        elif status == "kicked":
+            summary["blocked"].append(channel_name)
+        else:
+            summary["not_joined"].append(channel_name)
+
+    # Natijani ko'rsatish
+    result_text = "📊 <b>Kanallar holati:</b>\n\n"
+
+    if summary["joined"]:
+        result_text += f"✅ <b>Qo'shilgan ({len(summary['joined'])}):</b>\n"
+        for name in summary["joined"]:
+            result_text += f"• {name}\n"
+        result_text += "\n"
+
+    if summary["likely_pending"]:
+        result_text += f"⏳ <b>Request yuborgan ({len(summary['likely_pending'])}):</b>\n"
+        for name in summary["likely_pending"]:
+            result_text += f"• {name}\n"
+        result_text += "\n"
+
+    if summary["not_joined"]:
+        result_text += f"❌ <b>Qo'shilmagan ({len(summary['not_joined'])}):</b>\n"
+        for name in summary["not_joined"]:
+            result_text += f"• {name}\n"
+        result_text += "\n"
+
+    if summary["blocked"]:
+        result_text += f"🚫 <b>Bloklanган ({len(summary['blocked'])}):</b>\n"
+        for name in summary["blocked"]:
+            result_text += f"• {name}\n"
+        result_text += "\n"
+
+    if summary["errors"]:
+        result_text += f"⚠️ <b>Xatolar ({len(summary['errors'])}):</b>\n"
+        for item in summary["errors"]:
+            result_text += f"• {item['name']}: {item['error'][:50]}...\n"
+
+    await message.answer(result_text)
