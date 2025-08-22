@@ -549,6 +549,12 @@ async def request_sent_handler(callback: CallbackQuery):
         )
 
 
+@router.callback_query(F.data == "retry_check")
+async def retry_check_handler(callback: CallbackQuery):
+    """Qayta tekshirish handleri"""
+    # request_sent_handler bilan bir xil logika
+    await request_sent_handler(callback)
+
 @router.callback_query(F.data == "check_channels")
 async def check_channels_handler(callback: CallbackQuery):
 
