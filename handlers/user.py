@@ -1,6 +1,6 @@
 import logging
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery, FSInputFile, ChatJoinRequest
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -1236,3 +1236,237 @@ async def show_pending_requests(message: Message):
 
         except Exception as e:
             await message.answer(f"❌ {channel['channel_name']} xatosi: {e}")
+
+
+# Import qo'shing
+import aiohttp
+# from aiogram.methods import GetChatJoinRequests
+
+
+# To'g'rilangan join requests tekshiruvi
+async def check_pending_requests_fixed(bot, chat_id, user_id=None):
+    """Join requestlarni to'g'ri usulda tekshirish"""
+    try:
+        # Bot admin ekanligini tekshirish
+        bot_member = await bot.get_chat_member(chat_id, bot.id)
+
+        if bot_member.status not in ['administrator', 'creator']:
+            return {"error": "Bot admin emas"}
+
+        # 1-usul: Aiogram method orqali
+        try:
+            # GetChatJoinRequests methodini ishlatish
+            method = ChatJoinRequest(chat_id=chat_id, limit=50)
+            result = await bot(method)
+
+            if result and hasattr(result, 'requests'):
+                requests = result.requests
+
+                # Agar user_id berilgan bo'lsa, faqat shu foydalanuvchini qidirish
+                if user_id:
+                    for request in requests:
+                        if request.from_user.id == user_id:
+                            return {
+                                "found": True,
+                                "request": {
+                                    "user_id": request.from_user.id,
+                                    "first_name": request.from_user.first_name,
+                                    "username": request.from_user.username,
+                                    "date": request.date.timestamp() if request.date else None
+                                }
+                            }
+                    return {"found": False}
+                else:
+                    request_list = []
+                    for request in requests:
+                        request_list.append({
+                            "user_id": request.from_user.id,
+                            "first_name": request.from_user.first_name,
+                            "username": request.from_user.username,
+                            "date": request.date.timestamp() if request.date else None
+                        })
+                    return {"requests": request_list, "count": len(request_list)}
+            else:
+                return {"requests": [], "count": 0}
+
+        except Exception as e:
+            # 2-usul: Direct HTTP request
+            return await direct_api_request(bot, chat_id, user_id)
+
+    except Exception as e:
+        return {"error": f"Umumiy xato: {str(e)}"}
+
+
+async def direct_api_request(bot, chat_id, user_id=None):
+    """To'g'ridan-to'g'ri API chaqiruvi"""
+    try:
+        url = f"https://api.telegram.org/bot{bot.token}/getChatJoinRequests"
+        params = {
+            "chat_id": chat_id,
+            "limit": 50
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=params) as response:
+                result = await response.json()
+
+                if result.get("ok"):
+                    requests = result.get("result", {}).get("requests", [])
+
+                    if user_id:
+                        for request in requests:
+                            if request.get("from", {}).get("id") == user_id:
+                                return {
+                                    "found": True,
+                                    "request": request
+                                }
+                        return {"found": False}
+                    else:
+                        return {"requests": requests, "count": len(requests)}
+                else:
+                    return {"error": result.get("description", "API xatosi")}
+
+    except Exception as e:
+        return {"error": f"HTTP request xatosi: {str(e)}"}
+
+
+# Sodda usul - faqat member statusini tekshirish
+async def simple_request_check(bot, chat_id, user_id):
+    """Oddiy usul - faqat member statusini tahlil qilish"""
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+
+        # Status tahlili
+        if member.status == "left":
+            return {
+                "status": "left",
+                "interpretation": "Kanalga qo'shilmagan",
+                "likely_requested": False
+            }
+        elif member.status == "member":
+            return {
+                "status": "member",
+                "interpretation": "Faol a'zo",
+                "likely_requested": False  # Allaqachon a'zo
+            }
+        elif member.status == "restricted":
+            is_member = getattr(member, 'is_member', False)
+            if is_member:
+                return {
+                    "status": "restricted_member",
+                    "interpretation": "Cheklangan a'zo",
+                    "likely_requested": False
+                }
+            else:
+                return {
+                    "status": "restricted_not_member",
+                    "interpretation": "Request yuborgan yoki rad etilgan",
+                    "likely_requested": True
+                }
+        elif member.status == "kicked":
+            return {
+                "status": "kicked",
+                "interpretation": "Kanaldan chiqarilgan",
+                "likely_requested": False
+            }
+        else:
+            return {
+                "status": member.status,
+                "interpretation": f"Noma'lum status: {member.status}",
+                "likely_requested": False
+            }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# Yangilangan debug komanda
+@router.message(Command("check_requests"))
+async def check_user_requests(message: Message):
+    """Foydalanuvchining join requestlarini tekshirish"""
+    user_id = message.from_user.id
+
+    await message.answer("🔍 Join requestlar tekshirilmoqda...")
+
+    channels = await db.get_active_channels()
+
+    for channel in channels:
+        channel_id = channel['channel_id']
+
+        result_text = f"📺 <b>{channel['channel_name']}</b>\n\n"
+
+        # 1. Oddiy member status
+        simple_check = await simple_request_check(message.bot, channel_id, user_id)
+
+        if simple_check.get("error"):
+            result_text += f"❌ Xato: {simple_check['error']}\n"
+        else:
+            result_text += f"📊 Status: <code>{simple_check['status']}</code>\n"
+            result_text += f"💬 Tahlil: {simple_check['interpretation']}\n"
+            result_text += f"🤔 Request yuborgan bo'lishi mumkin: {'✅ Ha' if simple_check['likely_requested'] else '❌ Yoq'}\n"
+
+        result_text += "\n"
+
+        # 2. Join requests API (agar bot admin bo'lsa)
+        try:
+            api_check = await check_pending_requests_fixed(message.bot, channel_id, user_id)
+
+            if api_check.get("error"):
+                result_text += f"⚠️ API: {api_check['error']}\n"
+            elif api_check.get("found"):
+                result_text += f"✅ Join request topildi!\n"
+                req_info = api_check['request']
+                if isinstance(req_info, dict) and 'date' in req_info:
+                    result_text += f"📅 Sana: {req_info['date']}\n"
+            elif api_check.get("found") is False:
+                result_text += f"❌ Join request topilmadi\n"
+            else:
+                result_text += f"📋 API javob: {api_check}\n"
+
+        except Exception as e:
+            result_text += f"❌ API xatosi: {e}\n"
+
+        result_text += "\n" + "=" * 30 + "\n\n"
+
+        await message.answer(result_text)
+
+
+# Bot admin statusini tekshirish
+@router.message(Command("check_bot_perms"))
+async def check_bot_permissions(message: Message):
+    """Bot ruxsatlarini tekshirish"""
+    channels = await db.get_active_channels()
+
+    for channel in channels:
+        try:
+            bot_member = await message.bot.get_chat_member(channel['channel_id'], message.bot.id)
+
+            perm_text = f"🤖 <b>{channel['channel_name']}</b>\n\n"
+            perm_text += f"Status: <code>{bot_member.status}</code>\n"
+
+            if bot_member.status in ['administrator', 'creator']:
+                perm_text += "✅ Bot admin\n"
+
+                # Ruxsatlarni tekshirish
+                perms = [
+                    ("Can manage chat", getattr(bot_member, 'can_manage_chat', None)),
+                    ("Can delete messages", getattr(bot_member, 'can_delete_messages', None)),
+                    ("Can manage video chats", getattr(bot_member, 'can_manage_video_chats', None)),
+                    ("Can restrict members", getattr(bot_member, 'can_restrict_members', None)),
+                    ("Can promote members", getattr(bot_member, 'can_promote_members', None)),
+                    ("Can change info", getattr(bot_member, 'can_change_info', None)),
+                    ("Can invite users", getattr(bot_member, 'can_invite_users', None)),
+                    ("Can pin messages", getattr(bot_member, 'can_pin_messages', None)),
+                ]
+
+                for perm_name, perm_value in perms:
+                    if perm_value is not None:
+                        perm_text += f"• {perm_name}: {'✅' if perm_value else '❌'}\n"
+
+            else:
+                perm_text += "❌ Bot admin emas\n"
+
+            await message.answer(perm_text)
+
+        except Exception as e:
+            await message.answer(f"❌ {channel['channel_name']}: {e}")
