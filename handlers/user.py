@@ -1927,3 +1927,274 @@ async def simple_channel_check(message: Message):
             result_text += f"• {item['name']}: {item['error'][:50]}...\n"
 
     await message.answer(result_text)
+
+    # FAQAT TEKSHIRISH - hech narsa tasdiqlamaslik/bekor qilmaslik
+
+    async def check_user_pending_requests(bot_token, chat_id, user_id):
+        """Foydalanuvchining pending requestini faqat tekshirish"""
+        import aiohttp
+
+        try:
+            url = f"https://api.telegram.org/bot{bot_token}/getChatJoinRequests"
+            data = {"chat_id": chat_id, "limit": 50}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=data) as response:
+                    result = await response.json()
+
+                    if result.get("ok"):
+                        requests = result.get("result", {}).get("requests", [])
+                        total_count = result.get("result", {}).get("total_count", 0)
+
+                        # Foydalanuvchini qidirish
+                        for request in requests:
+                            if request.get("from", {}).get("id") == user_id:
+                                return {
+                                    "found": True,
+                                    "date": request.get("date"),
+                                    "bio": request.get("bio"),
+                                    "total_pending": total_count
+                                }
+
+                        return {
+                            "found": False,
+                            "total_pending": total_count
+                        }
+                    else:
+                        return {"error": result.get("description", "API xatosi")}
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def simple_member_status_check(bot, chat_id, user_id):
+        """Oddiy member status tekshiruvi"""
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+
+            if member.status == "member":
+                return {"status": "member", "message": "✅ Siz allaqachon a'zosiz"}
+            elif member.status == "administrator":
+                return {"status": "admin", "message": "👑 Siz adminsiz"}
+            elif member.status == "creator":
+                return {"status": "creator", "message": "👑 Siz yaratuvchisiz"}
+            elif member.status == "left":
+                return {"status": "left", "message": "❌ Kanalga qo'shilmadingiz"}
+            elif member.status == "kicked":
+                return {"status": "kicked", "message": "🚫 Kanaldan chiqarilgansiz"}
+            elif member.status == "restricted":
+                is_member = getattr(member, 'is_member', False)
+                if is_member:
+                    return {"status": "restricted_member", "message": "⚠️ Cheklangan a'zo"}
+                else:
+                    return {"status": "restricted_pending", "message": "⏳ Request yuborgan (pending)"}
+            else:
+                return {"status": member.status, "message": f"🤔 Noma'lum status: {member.status}"}
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    # Asosiy tekshirish komandasi
+    @router.message(Command("my_status"))
+    async def check_my_channel_status(message: Message):
+        """Mening barcha kanallar bo'yicha holatim - FAQAT TEKSHIRISH"""
+        user_id = message.from_user.id
+
+        await message.answer("🔍 Sizning holatingiz tekshirilmoqda...")
+
+        channels = await db.get_active_channels()
+
+        summary = {
+            "member": [],
+            "pending": [],
+            "not_joined": [],
+            "blocked": [],
+            "pending_confirmed": []  # API orqali tasdiqlangan pending requestlar
+        }
+
+        for channel in channels:
+            channel_id = channel['channel_id']
+            channel_name = channel['channel_name']
+
+            # 1. Member statusini tekshirish
+            status_info = await simple_member_status_check(message.bot, channel_id, user_id)
+
+            channel_result = {
+                "name": channel_name,
+                "member_status": status_info.get("status"),
+                "member_message": status_info.get("message"),
+                "api_confirmed": False,
+                "api_message": ""
+            }
+
+            # 2. Agar "pending" ko'rinsa, API orqali tasdiqlash
+            if status_info.get("status") == "restricted_pending":
+                api_check = await check_user_pending_requests(message.bot.token, channel_id, user_id)
+
+                if api_check.get("error"):
+                    channel_result["api_message"] = f"API xatosi: {api_check['error']}"
+                elif api_check.get("found"):
+                    channel_result["api_confirmed"] = True
+                    channel_result["api_message"] = f"✅ API tasdiqladi (Pending: {api_check['total_pending']})"
+                    summary["pending_confirmed"].append(channel_result)
+                else:
+                    channel_result["api_message"] = f"❌ API tasdiqlamadi (Pending: {api_check.get('total_pending', 0)})"
+                    summary["not_joined"].append(channel_result)
+            else:
+                # Status bo'yicha kategoriyalarga ajratish
+                if status_info.get("status") in ["member", "admin", "creator"]:
+                    summary["member"].append(channel_result)
+                elif status_info.get("status") == "kicked":
+                    summary["blocked"].append(channel_result)
+                else:
+                    summary["not_joined"].append(channel_result)
+
+        # Natijalarni ko'rsatish
+        if summary["member"]:
+            result_text = f"✅ <b>A'zo bo'lgan kanallar ({len(summary['member'])}):</b>\n"
+            for ch in summary["member"]:
+                result_text += f"• {ch['name']}: {ch['member_message']}\n"
+            result_text += "\n"
+            await message.answer(result_text)
+
+        if summary["pending_confirmed"]:
+            result_text = f"⏳ <b>Request yuborgan kanallar ({len(summary['pending_confirmed'])}):</b>\n"
+            for ch in summary["pending_confirmed"]:
+                result_text += f"• {ch['name']}\n"
+                result_text += f"  📊 Status: {ch['member_message']}\n"
+                result_text += f"  🔍 API: {ch['api_message']}\n\n"
+            await message.answer(result_text)
+
+        if summary["not_joined"]:
+            result_text = f"❌ <b>Qo'shilmagan kanallar ({len(summary['not_joined'])}):</b>\n"
+            for ch in summary["not_joined"]:
+                result_text += f"• {ch['name']}: {ch['member_message']}\n"
+                if ch['api_message']:
+                    result_text += f"  🔍 {ch['api_message']}\n"
+            result_text += "\n"
+            await message.answer(result_text)
+
+        if summary["blocked"]:
+            result_text = f"🚫 <b>Bloklangan kanallar ({len(summary['blocked'])}):</b>\n"
+            for ch in summary["blocked"]:
+                result_text += f"• {ch['name']}: {ch['member_message']}\n"
+            await message.answer(result_text)
+
+        # Umumiy xulosa
+        total_pending = len(summary["pending_confirmed"])
+        total_member = len(summary["member"])
+        total_channels = len(channels)
+
+        summary_text = f"📊 <b>Umumiy natija:</b>\n\n"
+        summary_text += f"👥 A'zo: {total_member}/{total_channels}\n"
+        summary_text += f"⏳ Pending: {total_pending}/{total_channels}\n"
+        summary_text += f"❌ Qo'shilmagan: {len(summary['not_joined'])}/{total_channels}\n"
+        summary_text += f"🚫 Bloklangan: {len(summary['blocked'])}/{total_channels}\n\n"
+
+        if total_member == total_channels:
+            summary_text += f"🎉 Barcha kanallarga qo'shildingiz!"
+        elif total_pending > 0:
+            summary_text += f"⏳ {total_pending} ta kanalda requestingiz admin tasdiqini kutmoqda"
+        else:
+            summary_text += f"💡 Qo'shilmagan kanallarga request yuboring"
+
+        await message.answer(summary_text)
+
+    # Bitta kanal uchun batafsil tekshirish
+    @router.message(Command("check_channel"))
+    async def check_specific_channel(message: Message):
+        """Muayyan kanal uchun batafsil tekshirish"""
+        # Format: /check_channel channel_id
+        args = message.text.split()
+        if len(args) != 2:
+            channels = await db.get_active_channels()
+            channels_list = "\n".join([f"• {ch['channel_name']}: {ch['channel_id']}" for ch in channels])
+            await message.answer(f"❌ Format: /check_channel <channel_id>\n\n📺 Mavjud kanallar:\n{channels_list}")
+            return
+
+        try:
+            channel_id = int(args[1])
+        except ValueError:
+            await message.answer("❌ Channel ID raqam bo'lishi kerak")
+            return
+
+        user_id = message.from_user.id
+
+        # Kanal nomini topish
+        channels = await db.get_active_channels()
+        channel_name = "Noma'lum kanal"
+        for ch in channels:
+            if str(ch['channel_id']) == str(channel_id):
+                channel_name = ch['channel_name']
+                break
+
+        await message.answer(f"🔍 {channel_name} uchun batafsil tekshirish...")
+
+        # 1. Member status
+        status_info = await simple_member_status_check(message.bot, channel_id, user_id)
+
+        result_text = f"📺 <b>{channel_name}</b>\n"
+        result_text += f"🆔 ID: <code>{channel_id}</code>\n\n"
+
+        if status_info.get("error"):
+            result_text += f"❌ Xato: {status_info['error']}\n"
+            await message.answer(result_text)
+            return
+
+        result_text += f"👤 <b>Member Status:</b>\n"
+        result_text += f"Status: <code>{status_info['status']}</code>\n"
+        result_text += f"Ma'no: {status_info['message']}\n\n"
+
+        # 2. API tekshiruvi (agar pending bo'lsa)
+        if status_info.get("status") == "restricted_pending":
+            api_check = await check_user_pending_requests(message.bot.token, channel_id, user_id)
+
+            result_text += f"🔍 <b>API Tekshiruvi:</b>\n"
+
+            if api_check.get("error"):
+                result_text += f"❌ Xato: {api_check['error']}\n"
+            elif api_check.get("found"):
+                result_text += f"✅ <b>Pending request tasdiqlandi!</b>\n"
+                result_text += f"📅 Sana: {api_check.get('date', 'N/A')}\n"
+                if api_check.get("bio"):
+                    result_text += f"📝 Bio: {api_check['bio']}\n"
+                result_text += f"📊 Jami pending: {api_check.get('total_pending', 'N/A')}\n"
+            else:
+                result_text += f"❌ API pending request tasdiqlamadi\n"
+                result_text += f"📊 Jami pending: {api_check.get('total_pending', 0)}\n"
+        else:
+            result_text += f"💡 <b>Tavsiya:</b>\n"
+            if status_info.get("status") == "left":
+                result_text += f"📤 Kanalga join request yuboring\n"
+            elif status_info.get("status") in ["member", "admin", "creator"]:
+                result_text += f"🎉 Hech narsa qilish kerak emas\n"
+            elif status_info.get("status") == "kicked":
+                result_text += f"🚫 Kanaldan chiqarilgansiz\n"
+
+        await message.answer(result_text)
+
+    # Qisqa holat tekshiruvi
+    @router.message(Command("quick_status"))
+    async def quick_channel_status(message: Message):
+        """Tezkor holat tekshiruvi"""
+        user_id = message.from_user.id
+        channels = await db.get_active_channels()
+
+        status_text = f"⚡ <b>Tezkor holat:</b>\n\n"
+
+        for channel in channels:
+            status_info = await simple_member_status_check(message.bot, channel['channel_id'], user_id)
+
+            if status_info.get("error"):
+                icon = "❌"
+            elif status_info.get("status") in ["member", "admin", "creator"]:
+                icon = "✅"
+            elif status_info.get("status") == "restricted_pending":
+                icon = "⏳"
+            elif status_info.get("status") == "kicked":
+                icon = "🚫"
+            else:
+                icon = "❌"
+
+            status_text += f"{icon} {channel['channel_name']}\n"
+
+        await message.answer(status_text)
