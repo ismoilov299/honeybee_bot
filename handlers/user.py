@@ -57,7 +57,7 @@ async def start_handler(message: Message, state: FSMContext):
                     success_message = """
 Tabriklayman, siz muvaffaqiyatli ro'yxatdan o'tdingiz 🥳
 
-**https://t.me/+mnyDxW0Zsug3MmRi**
+https://t.me/+mnyDxW0Zsug3MmRi
 
 Darsliklar shu kanalga yuboriladi. Qo'shilib oling!
                     """
@@ -398,7 +398,6 @@ async def request_sent_handler(callback: CallbackQuery):
                 reply_markup=builder.as_markup()
             )
     else:
-        # Agar rasm yo'q bo'lsa, faqat matn bilan
         await callback.message.answer(
             invitation_post_text,
             reply_markup=builder.as_markup()
@@ -407,17 +406,16 @@ async def request_sent_handler(callback: CallbackQuery):
 
 @router.callback_query(F.data == "check_channels")
 async def check_channels_handler(callback: CallbackQuery):
-    """Kanallar holatini tekshirish"""
+
     user_id = callback.from_user.id
 
-    # Bu yerda real tekshiruv qo'shish kerak
-    # Hozircha faqat database holatini tekshiramiz
+
     all_joined = await db.check_all_channels_joined(user_id)
 
     if all_joined:
         user = await db.get_user(user_id)
 
-        # Bot username avtomatik olish
+
         bot_info = await callback.bot.get_me()
         bot_username = bot_info.username
 
