@@ -329,6 +329,42 @@ class Database:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
 
+    async def check_all_channels_joined_real(self, user_id: int) -> Dict:
+        """Foydalanuvchining haqiqiy kanal holatini tekshirish"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+
+            # Barcha aktiv kanallar
+            async with db.execute(
+                    "SELECT COUNT(*) as total FROM channels WHERE is_active = 1"
+            ) as cursor:
+                total_channels = (await cursor.fetchone())[0]
+
+            # Haqiqatan qo'shilgan kanallar (joined = 1)
+            async with db.execute("""
+                SELECT COUNT(*) as joined FROM user_channels uc
+                JOIN channels c ON uc.channel_id = c.id
+                WHERE uc.user_id = ? AND c.is_active = 1 AND uc.joined = 1
+            """, (user_id,)) as cursor:
+                joined_channels = (await cursor.fetchone())[0]
+
+            # Request yuborgan kanallar (request_sent = 1, joined = 0)
+            async with db.execute("""
+                SELECT COUNT(*) as pending FROM user_channels uc
+                JOIN channels c ON uc.channel_id = c.id
+                WHERE uc.user_id = ? AND c.is_active = 1 
+                AND uc.request_sent = 1 AND uc.joined = 0
+            """, (user_id,)) as cursor:
+                pending_channels = (await cursor.fetchone())[0]
+
+            return {
+                'total': total_channels,
+                'joined': joined_channels,
+                'pending': pending_channels,
+                'not_joined': total_channels - joined_channels - pending_channels,
+                'all_joined': total_channels > 0 and joined_channels == total_channels
+            }
+
 
 # Singleton pattern uchun
 db = Database()
