@@ -21,18 +21,8 @@ async def main():
     await db.init_db()
 
     # Standart kanallarni qo'shish (faqat agar mavjud bo'lmasa)
-    default_channels = [
-        {
-            "channel_id": "-1002915789648",
-            "channel_name": "test",
-            "channel_link": "https://t.me/+PIRvJVNy8mthMGM6"
-        },
-        {
-            "channel_id": "-1002973522990",
-            "channel_name": "test 2",
-            "channel_link": "https://t.me/+ORzjE72hInoxZWIy"
-        }
-    ]
+
+
 
     # Mavjud kanallarni tekshirish
     existing_channels = await db.get_active_channels()
