@@ -95,27 +95,30 @@ Bepul darsliklarni qo'lga kiritish uchun quyidagi kanallarga a'zo bo'ling👇
 
 @router.message(F.text == "✅ Tekshirish")
 async def check_membership_handler(message: Message):
-    """Tekshirish tugmasi - to'g'ridan-to'g'ri keyingi bosqichga o'tish"""
+    #  Darsliklarni olish
+    link = 'https://t.me/+mnyDxW0Zsug3MmRi'
+    keyboard = InlineKeyboardBuilder()
+    keyboard.button(text=" Darsliklarni olish", url=link)
 
-    await message.answer("""
-<b>HAR TOMONLAMA RIVOJLANISHNI ISTAGANLAR UCHUN</b> 🔝
+    await message.answer('''
+    HAR TOMONLAMA RIVOJLANISHNI ISTAGANLAR UCHUN 🔝
 
 ✨ Assalomu alaykum, muslimam!
 
 Bu yerda 5 nafar mutaxassis o'z tajribasi va bilimlarini jamlab, siz uchun bepul darslik tayyorlashdi. Har bir mavzu — rivojingiz uchun muhim:
 
-📌<b>Gulruh</b> – Hammasi blogdan boshlanadi  
-📌<b>Ayilen</b> – Oila qurishga tayyorgarlik va qo'rquvlarni yengish  
-📌<b>Mohinur Barista</b> – Koreyada yashash va o'qish imkoniyatlari  
-📌<b>Xilola Qayumova</b> – Homiladorlar bilishi shart  
-📌<b>Sojida Karimova</b> – Sog'lom munosabatlar siri  
+📌 Gulruh – "Hammasi blogdan boshlanadi"
+📌 Ayilen – Oila qurishga tayyorgarlik va qo'rquvlarni yengish
+📌 Mohinur Barista – Koreyada yashash va o'qish imkoniyatlari
+📌 Xilola Qayumova – "Homiladorlar bilishi shart"
+📌 Sojida Karimova – Sog'lom munosabatlar siri
 
 📖 Bu loyiha sizga maksimal foyda berish va yangi imkoniyatlarga yo'l ochish uchun takrorlanmas imkon.
 
 Yagona shart - bot bergan taklif postini atigi 6 ta yaqiningizga yuborish, xolos!
 
-Taklif postini olish uchun:👇
-""", parse_mode="HTML", reply_markup=get_offer_keyboard())
+Darsliklar jamlangan kanalga linkni olish uchun👇
+    ''', reply_markup=keyboard.as_markup())
 
 
 @router.message(F.text == "Taklif postini olish")
@@ -181,54 +184,8 @@ async def send_offer_post(message: Message):
     await message.answer("Muvaffaqiyat tilayman! 🚀", reply_markup=get_start_keyboard())
 
 
-@router.message(F.text == "📊 Status")
-async def status_handler(message: Message):
-    """Foydalanuvchi statusini ko'rsatish"""
-    user = await db.get_user(message.from_user.id)
-
-    if not user:
-        await message.answer("❌ Xato yuz berdi. /start ni bosing.")
-        return
-
-    bot_info = await message.bot.get_me()
-    bot_username = bot_info.username
-    referral_link = f"https://t.me/{bot_username}?start={user['referral_code']}"
-
-    status_text = f"""
-📊 <b>Sizning statusingiz:</b>
-
-👤 Ism: {user['first_name']}
-🆔 Referral kod: <code>{user['referral_code']}</code>
-📈 Taklif qilganlar: {user['referral_count']}/{settings.REQUIRED_REFERRALS}
-✅ Vazifa holati: {"Bajarildi" if user['completed_task'] else "Bajarilmagan"}
-
-🔗 <b>Sizning linkingiz:</b>
-<code>{referral_link}</code>
-
-💡 Bu linkni do'stlaringizga yuboring!
-    """
-    await message.answer(status_text)
 
 
-@router.message(F.text == "🔗 Mening linkim")
-async def my_link_handler(message: Message):
-    """Foydalanuvchi linkini ko'rsatish"""
-    user = await db.get_user(message.from_user.id)
-
-    if not user:
-        await message.answer("❌ Xato yuz berdi. /start ni bosing.")
-        return
-
-    bot_info = await message.bot.get_me()
-    bot_username = bot_info.username
-    referral_link = f"https://t.me/{bot_username}?start={user['referral_code']}"
-
-    await message.answer(
-        f"🔗 <b>Sizning maxsus linkingiz:</b>\n\n"
-        f"<code>{referral_link}</code>\n\n"
-        f"📊 Holat: {user['referral_count']}/{settings.REQUIRED_REFERRALS}\n\n"
-        f"Bu linkni do'stlaringiz bilan bo'lishing!"
-    )
 
 
 @router.message(F.text == "ℹ️ Yordam")

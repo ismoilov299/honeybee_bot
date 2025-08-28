@@ -8,7 +8,7 @@ def get_start_keyboard() -> ReplyKeyboardMarkup:
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="✅ Tekshirish")],
-            [KeyboardButton(text="🔗 Mening linkim")]
+
         ],
         resize_keyboard=True
     )

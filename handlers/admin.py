@@ -5,6 +5,7 @@ from aiogram.types import Message, ReplyKeyboardRemove
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from config import settings
 from database.database import db
@@ -435,6 +436,41 @@ async def remove_all_channels_process(message: Message, state: FSMContext):
     await state.clear()
 
 
+async def safe_send_message(bot, user_id: int, text: str = None, photo: str = None, caption: str = None):
+    """Xavfsiz xabar yuborish - xatolarni handle qiladi"""
+    try:
+        if photo:
+            await bot.send_photo(
+                chat_id=user_id,
+                photo=photo,
+                caption=caption,
+                parse_mode="HTML"
+            )
+        else:
+            await bot.send_message(
+                chat_id=user_id,
+                text=text,
+                parse_mode="HTML"
+            )
+        return True, None
+    except TelegramForbiddenError:
+        # Foydalanuvchi botni block qilgan
+        return False, "blocked"
+    except TelegramBadRequest as e:
+        if "chat not found" in str(e).lower():
+            # Foydalanuvchi accountini delete qilgan
+            return False, "deleted"
+        elif "user is deactivated" in str(e).lower():
+            # Account deactive
+            return False, "deactivated"
+        else:
+            # Boshqa bad request xatolari
+            return False, f"bad_request: {str(e)}"
+    except Exception as e:
+        # Boshqa xatolar
+        return False, f"error: {str(e)}"
+
+
 @router.message(F.text == "📢 Xabar yuborish")
 async def broadcast_start(message: Message, state: FSMContext):
     """Umumiy xabar yuborishni boshlash"""
@@ -476,59 +512,112 @@ async def broadcast_process(message: Message, state: FSMContext):
 
     # Xabar yuborish jarayoni
     sent_count = 0
-    failed_count = 0
+    blocked_count = 0
+    deleted_count = 0
+    error_count = 0
+
+    error_details = {
+        "blocked": 0,
+        "deleted": 0,
+        "deactivated": 0,
+        "other": 0
+    }
 
     # Progress xabari
     progress_message = await message.answer(
-        f"📤 Xabar yuborish boshlandi...\n👥 Jami: {len(all_users)} foydalanuvchi",
-        reply_markup=get_admin_keyboard()
+        f"📤 Xabar yuborish boshlandi...\n👥 Jami: {len(all_users)} foydalanuvchi"
     )
 
-    for user in all_users:
-        try:
-            if broadcast_photo:
-                # Rasm bilan xabar yuborish
-                await message.bot.send_photo(
-                    chat_id=user['telegram_id'],
-                    photo=broadcast_photo,
-                    caption=broadcast_text,
-                    parse_mode="HTML"
-                )
-            else:
-                # Faqat matn yuborish
-                await message.bot.send_message(
-                    chat_id=user['telegram_id'],
-                    text=broadcast_text,
-                    parse_mode="HTML"
-                )
+    batch_size = 10  # Har necha xabardan keyin progress yangilash
+    last_update = 0
+
+    for i, user in enumerate(all_users, 1):
+        # Xabar yuborish
+        success, error_type = await safe_send_message(
+            bot=message.bot,
+            user_id=user['telegram_id'],
+            text=broadcast_text,
+            photo=broadcast_photo,
+            caption=broadcast_text if broadcast_photo else None
+        )
+
+        if success:
             sent_count += 1
+        else:
+            # Xato turini categorize qilish
+            if error_type == "blocked":
+                error_details["blocked"] += 1
+            elif error_type == "deleted":
+                error_details["deleted"] += 1
+            elif error_type == "deactivated":
+                error_details["deactivated"] += 1
+            else:
+                error_details["other"] += 1
 
-            # Har 10 ta xabardan keyin progress yangilash
-            if sent_count % 10 == 0:
-                await progress_message.edit_text(
-                    f"📤 Xabar yuborish davom etmoqda...\n"
-                    f"✅ Yuborildi: {sent_count}\n"
-                    f"❌ Xato: {failed_count}\n"
-                    f"📊 Progress: {sent_count + failed_count}/{len(all_users)}"
-                )
+        # Progress yangilash (har 10 ta yoki oxirgi xabar)
+        if i % batch_size == 0 or i == len(all_users):
+            try:
+                total_errors = sum(error_details.values())
+                progress_text = f"""📤 Xabar yuborish davom etmoqda...
 
-            # Telegram limitlariga mos ravishda kechikish
-            await asyncio.sleep(0.05)  # 50ms kechikish
+✅ Yuborildi: {sent_count}
+❌ Jami xatolar: {total_errors}
+  • 🚫 Bloklagan: {error_details['blocked']}
+  • 🗑 O'chirgan: {error_details['deleted']}
+  • ⏸ Deaktiv: {error_details['deactivated']}
+  • ❓ Boshqa: {error_details['other']}
 
-        except Exception as e:
-            failed_count += 1
-            logger.error(f"Foydalanuvchi {user['telegram_id']} ga xabar yuborishda xato: {e}")
+📊 Progress: {i}/{len(all_users)} ({(i / len(all_users) * 100):.1f}%)"""
+
+                await progress_message.edit_text(progress_text)
+                last_update = i
+            except TelegramBadRequest as edit_error:
+                # Agar edit qilib bo'lmasa, yangi xabar yuborish
+                if "message can't be edited" in str(edit_error).lower():
+                    try:
+                        await progress_message.delete()
+                    except:
+                        pass
+
+                    total_errors = sum(error_details.values())
+                    progress_message = await message.answer(f"""📤 Xabar yuborish davom etmoqda...
+
+✅ Yuborildi: {sent_count}
+❌ Jami xatolar: {total_errors}
+
+📊 Progress: {i}/{len(all_users)} ({(i / len(all_users) * 100):.1f}%)""")
+            except Exception as e:
+                logger.error(f"Progress yangilashda xato: {e}")
+
+        # Telegram rate limit uchun kechikish
+        await asyncio.sleep(0.05)  # 50ms
 
     # Yakuniy natija
+    total_errors = sum(error_details.values())
     final_message = f"""📊 <b>Xabar yuborish yakunlandi!</b>
 
-✅ Muvaffaqiyatli yuborildi: {sent_count}
-❌ Xato: {failed_count}
-👥 Jami: {len(all_users)}
+✅ Muvaffaqiyatli: {sent_count}
+❌ Jami xatolar: {total_errors}
+👥 Jami foydalanuvchi: {len(all_users)}
 
-{"🎉 Barcha foydalanuvchilarga muvaffaqiyatli yuborildi!" if failed_count == 0 else f"⚠️ {failed_count} ta foydalanuvchiga yuborib bo'lmadi"}"""
+<b>📋 Xato tafsilotlari:</b>
+🚫 Botni bloklagan: {error_details['blocked']}
+🗑 Accountni o'chirgan: {error_details['deleted']}
+⏸ Deaktiv account: {error_details['deactivated']}
+❓ Boshqa xatolar: {error_details['other']}
 
-    await progress_message.edit_text(final_message)
+📈 Muvaffaqiyat darajasi: {(sent_count / len(all_users) * 100):.1f}%"""
+
+    try:
+        await progress_message.edit_text(final_message)
+    except TelegramBadRequest:
+        # Agar edit qilib bo'lmasa, yangi xabar yuborish
+        try:
+            await progress_message.delete()
+        except:
+            pass
+        await message.answer(final_message, reply_markup=get_admin_keyboard())
+
     await state.clear()
 
 
@@ -547,13 +636,7 @@ async def back_to_user_mode(message: Message, state: FSMContext):
 
 @router.message(Command("msg"))
 async def broadcast_message_handler(message: Message):
-    """Barcha vazifani bajargan foydalanuvchilarga xabar yuborish"""
-
-    # Faqat admin foydalana olishi uchun tekshirish (ixtiyoriy)
-    # admin_ids = [123456789, 987654321]  # Admin ID larini kiriting
-    # if message.from_user.id not in admin_ids:
-    #     await message.answer("❌ Bu komandani faqat adminlar ishlatishi mumkin!")
-    #     return
+    """Barcha vazifani bajargan foydalanuvchilarga xabar yuborish - Tuzatilgan versiya"""
 
     # Vazifani bajargan barcha foydalanuvchilarni olish
     completed_users = await db.get_completed_users()
@@ -570,40 +653,30 @@ Darsliklar shu kanalga yuboriladi. Qo'shilib oling!"""
 
     # Xabar yuborish jarayoni
     sent_count = 0
-    failed_count = 0
+    error_details = {
+        "blocked": 0,
+        "deleted": 0,
+        "deactivated": 0,
+        "other": 0
+    }
 
     # Progress xabari
     progress_message = await message.answer(
         f"📤 Xabar yuborish boshlandi...\n👥 Jami: {len(completed_users)} foydalanuvchi")
 
-    for user in completed_users:
-        try:
-            await message.bot.send_message(
-                chat_id=user['telegram_id'],
-                text=success_message
-            )
+    for i, user in enumerate(completed_users, 1):
+        success, error_type = await safe_send_message(
+            bot=message.bot,
+            user_id=user['telegram_id'],
+            text=success_message
+        )
+
+        if success:
             sent_count += 1
-
-            # Har 10 ta xabardan keyin progress yangilash
-            if sent_count % 10 == 0:
-                await progress_message.edit_text(
-                    f"📤 Xabar yuborish davom etmoqda...\n"
-                    f"✅ Yuborildi: {sent_count}\n"
-                    f"❌ Xato: {failed_count}\n"
-                    f"📊 Progress: {sent_count + failed_count}/{len(completed_users)}"
-                )
-
-        except Exception as e:
-            failed_count += 1
-            logger.error(f"Foydalanuvchi {user['telegram_id']} ga xabar yuborishda xato: {e}")
-
-    # Yakuniy natija
-    final_message = f"""📊 <b>Xabar yuborish yakunlandi!</b>
-
-✅ Muvaffaqiyatli yuborildi: {sent_count}
-❌ Xato: {failed_count}
-👥 Jami: {len(completed_users)}
-
-{"🎉 Barcha foydalanuvchilarga muvaffaqiyatli yuborildi!" if failed_count == 0 else f"⚠️ {failed_count} ta foydalanuvchiga yuborib bo'lmadi"}"""
-
-    await progress_message.edit_text(final_message)
+        else:
+            if error_type == "blocked":
+                error_details["blocked"] += 1
+            elif error_type == "deleted":
+                error_details["deleted"] += 1
+            elif error_type == "deactivated":
+                error_details["deactivated"] += 1
